@@ -5,6 +5,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
  
-COPY xrp_alert.py .
+COPY monitor_script.py .
  
-CMD ["python", "-u", "xrp_alert.py"]
+CMD ["python", "-u", "monitor_script.py"]
