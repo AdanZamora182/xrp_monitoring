@@ -3,6 +3,7 @@ import time
 import logging
 import requests
 from datetime import datetime
+import pytz
 
 # ─── Configuración ────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "TU_BOT_TOKEN_AQUI")
@@ -13,6 +14,9 @@ PRICE_PRIORITY = 1.25   # Alerta prioritaria
 
 CHECK_INTERVAL = 60     # Segundos entre cada consulta de precio
 
+TIMEZONE = pytz.timezone("America/Mexico_City")
+REPORT_HOURS = {7, 20}  # 7:00 AM y 8:00 PM hora México
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -21,8 +25,9 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ─── Estado interno (evita spam de alertas repetidas) ─────────────────────────
-last_alert_sent = None   # "medium" | "priority" | None
+# ─── Estado interno ───────────────────────────────────────────────────────────
+last_alert_sent = None        # "medium" | "priority" | None
+last_report_hour_sent = None  # (fecha, hora) para evitar reporte duplicado
 
 
 def get_xrp_price():
@@ -56,9 +61,44 @@ def send_telegram(message):
         return False
 
 
+def check_daily_report(price):
+    """Envía reporte diario a las 7:00 AM y 8:00 PM hora México."""
+    global last_report_hour_sent
+
+    now_mx = datetime.now(TIMEZONE)
+    current_hour = now_mx.hour
+    today = now_mx.date()
+    key = (today, current_hour)
+
+    if current_hour in REPORT_HOURS and last_report_hour_sent != key:
+        period = "🌅 Reporte Matutino" if current_hour == 7 else "🌙 Reporte Nocturno"
+        now_str = now_mx.strftime("%d/%m/%Y %H:%M:%S")
+
+        # Indicador visual según precio
+        if price < PRICE_PRIORITY:
+            indicator = "🔴 Por debajo del umbral prioritario"
+        elif price < PRICE_MEDIUM:
+            indicator = "🟡 Por debajo del umbral medio"
+        else:
+            indicator = "🟢 Precio estable"
+
+        msg = (
+            f"📊 *{period} — XRP*\n"
+            f"Precio actual: `${price:.4f} USD`\n"
+            f"Estado: {indicator}\n"
+            f"Umbral medio: `${PRICE_MEDIUM} USD`\n"
+            f"Umbral prioritario: `${PRICE_PRIORITY} USD`\n"
+            f"🕐 {now_str} (Ciudad de México)"
+        )
+        send_telegram(msg)
+        last_report_hour_sent = key
+        log.info("Reporte diario enviado — hora: %d:00", current_hour)
+
+
 def check_and_alert(price):
     global last_alert_sent
-    now = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+    now = datetime.now(TIMEZONE).strftime("%d/%m/%Y %H:%M:%S")
 
     if price < PRICE_PRIORITY:
         level = "priority"
@@ -67,7 +107,7 @@ def check_and_alert(price):
                 f"🚨 *ALERTA PRIORITARIA — XRP*\n"
                 f"Precio actual: `${price:.4f} USD`\n"
                 f"Por debajo del umbral prioritario de `${PRICE_PRIORITY} USD`\n"
-                f"🕐 {now}"
+                f"🕐 {now} (Ciudad de México)"
             )
             send_telegram(msg)
             last_alert_sent = level
@@ -80,20 +120,19 @@ def check_and_alert(price):
                 f"⚠️ *Alerta Nivel Medio — XRP*\n"
                 f"Precio actual: `${price:.4f} USD`\n"
                 f"Por debajo del umbral de `${PRICE_MEDIUM} USD`\n"
-                f"🕐 {now}"
+                f"🕐 {now} (Ciudad de México)"
             )
             send_telegram(msg)
             last_alert_sent = level
             log.info("Alerta MEDIA enviada — precio: $%.4f", price)
 
     else:
-        # El precio volvió a zona normal -> resetear para que la próxima bajada avise
         if last_alert_sent is not None:
             msg = (
                 f"✅ *XRP recuperado*\n"
                 f"Precio actual: `${price:.4f} USD`\n"
                 f"De nuevo por encima de `${PRICE_MEDIUM} USD`\n"
-                f"🕐 {now}"
+                f"🕐 {now} (Ciudad de México)"
             )
             send_telegram(msg)
             log.info("Precio recuperado — alerta reseteada")
@@ -103,11 +142,13 @@ def check_and_alert(price):
 def main():
     log.info("Monitor XRP iniciado — revisando cada %ds", CHECK_INTERVAL)
     log.info("Umbrales: Medio=$%.2f | Prioritario=$%.2f", PRICE_MEDIUM, PRICE_PRIORITY)
+    log.info("Reportes diarios: 7:00 AM y 8:00 PM (Ciudad de México)")
 
     while True:
         price = get_xrp_price()
         if price is not None:
             log.info("XRP: $%.4f USD", price)
+            check_daily_report(price)
             check_and_alert(price)
         time.sleep(CHECK_INTERVAL)
 
